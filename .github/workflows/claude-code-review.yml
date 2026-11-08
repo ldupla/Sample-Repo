@@ -53,7 +53,7 @@ jobs:
       - name: Check out the review agent
         uses: actions/checkout@v4
         with:
-          repository: OWNER/CodeReview_ai-agent         # EDIT: the agent's repository
+          repository: ldupla/CodeReview_ai-agent         # EDIT: the agent's repository
           token: ${{ secrets.REVIEW_AGENT_TOKEN }}       # read access to that repository
           path: .
 
