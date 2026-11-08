@@ -1,0 +1,112 @@
+# AI code review on every pull request.
+#
+# Copy this file into the repository you want reviewed, at
+#   .github/workflows/claude-code-review.yml
+# then follow ci/github/README.md in the review agent repository for the
+# secrets and the two things to edit below: CLAUDE_AUTH and the agent
+# repository name.
+#
+# What happens on each run:
+#   1. The review agent repository is checked out at the workspace root, so
+#      CLAUDE.md, .claude/ and the agent files are where Claude Code expects them.
+#   2. The pull request's repository is checked out into ./target.
+#   3. A review config is generated from the template, pointing at ./target.
+#   4. Claude Code runs the code-review skill and posts the review to the PR.
+#   5. The Markdown report is kept as a workflow artifact.
+
+name: AI code review
+
+env:
+  # How the action signs in to Claude. EDIT to one of:
+  #   api_key       - ANTHROPIC_API_KEY secret; billed per token to the Console account
+  #   subscription  - CLAUDE_CODE_OAUTH_TOKEN secret from `claude setup-token`;
+  #                   billed to the Claude subscription of the person who made it
+  CLAUDE_AUTH: api_key
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Pull requests from forks receive no secrets, and drafts are not ready.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the review agent
+        uses: actions/checkout@v4
+        with:
+          repository: ldupla/CodeReview_ai-agent         # EDIT: the agent's repository
+          token: ${{ secrets.REVIEW_AGENT_TOKEN }}       # read access to that repository
+          path: .
+
+      - name: Check out the pull request repository
+        uses: actions/checkout@v4
+        with:
+          path: target
+          fetch-depth: 0
+
+      - name: Write the review config
+        run: |
+          cp config/review.config.template.yaml config/review.config.yaml
+          sed -i 's|^  path: ""|  path: "./target"|'                                   config/review.config.yaml
+          sed -i 's|^  repo: null|  repo: ${{ github.repository }}|'                   config/review.config.yaml
+          sed -i 's|^  number: null|  number: ${{ github.event.pull_request.number }}|' config/review.config.yaml
+          sed -i 's|^  post: false|  post: true|'                                      config/review.config.yaml
+          sed -i 's|^  post_event: auto|  post_event: comment|'                        config/review.config.yaml
+          echo "Generated config:"
+          cat config/review.config.yaml
+
+      - name: Check the credential for the chosen mode
+        env:
+          API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          case "$CLAUDE_AUTH" in
+            api_key)
+              [ -n "$API_KEY" ] || { echo "::error::CLAUDE_AUTH is api_key but the ANTHROPIC_API_KEY secret is not set"; exit 1; } ;;
+            subscription)
+              [ -n "$OAUTH_TOKEN" ] || { echo "::error::CLAUDE_AUTH is subscription but the CLAUDE_CODE_OAUTH_TOKEN secret is not set"; exit 1; } ;;
+            *)
+              echo "::error::CLAUDE_AUTH must be api_key or subscription, got '$CLAUDE_AUTH'"; exit 1 ;;
+          esac
+          echo "Using $CLAUDE_AUTH mode"
+
+      - name: Run the review
+        uses: anthropics/claude-code-action@v1
+        env:
+          # gh inside the review uses the workflow token to read and post.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Only the input for the chosen mode receives a value; the other is empty.
+          anthropic_api_key: ${{ env.CLAUDE_AUTH == 'api_key' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ env.CLAUDE_AUTH == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          prompt: >-
+            /code-review Review pull request ${{ github.event.pull_request.number }}
+            of ${{ github.repository }} and post the review to the pull request.
+          # There is no permission prompt in CI. This list is the only gate.
+          # The last entry is the posting command, limited to this repository's
+          # pull request endpoints.
+          claude_args: >-
+            --max-turns 80
+            --allowedTools "Read,Write,Glob,Grep,Bash(git fetch:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(git grep:*),Bash(git branch:*),Bash(git status:*),Bash(gh auth status:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api repos/${{ github.repository }}/pulls:*)"
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-review-report-pr-${{ github.event.pull_request.number }}
+          path: reports/
+          if-no-files-found: ignore
