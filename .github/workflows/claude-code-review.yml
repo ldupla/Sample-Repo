@@ -26,7 +26,7 @@ env:
   #   api_key       - ANTHROPIC_API_KEY secret; billed per token to the Console account
   #   subscription  - CLAUDE_CODE_OAUTH_TOKEN secret from `claude setup-token`;
   #                   billed to the Claude subscription of the person who made it
-  CLAUDE_AUTH: api_key
+  CLAUDE_AUTH: subscription
 
 on:
   pull_request:
