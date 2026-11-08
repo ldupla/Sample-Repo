@@ -36,7 +36,7 @@ export default function App() {
   }
 
   function clearCompleted() {
-    setTodos((prev) => prev.filter((todo) => !todo.done))
+    setTodos((prev) => prev.filter((todo) => todo.done))
   }
 
   const visibleTodos = todos.filter((todo) => {
